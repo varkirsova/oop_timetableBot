@@ -1,0 +1,7 @@
+telegram:
+  botName: timetabLETIbot
+  botToken: ${token}
+
+spring:
+  application:
+    name: timetable-bot
