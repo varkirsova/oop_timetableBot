@@ -76,7 +76,7 @@ public class TimetableAPIservice {
 
                     String form = lessonNode.get("form").asText();
                     if ("online".equals(form)) {
-                        lesson.room = "дистанционно";
+                        lesson.room = "онлайн";
                     } else {
                         lesson.room = lessonNode.path("room").asText();
                         if (lesson.room.isEmpty()) lesson.room = "—";
@@ -91,5 +91,25 @@ public class TimetableAPIservice {
             result.add(ds);
         }
         return result;
+    }
+
+    public JsonNode getRawSchedule(String groupNumber) throws Exception {
+        String url = String.format(
+                "https://digital.etu.ru/api/mobile/schedule?groupNumber=%s&season=autumn&year=2025&joinWeeks=true&withURL=true",
+                groupNumber
+        );
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", "Telegram Bot")
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                throw new RuntimeException("Ошибка API: " + response.code());
+            }
+            String json = response.body().string();
+            return objectMapper.readTree(json);
+        }
     }
 }

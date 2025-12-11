@@ -10,22 +10,23 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import ru.etu.timetable_bot.api.TimetableAPIservice;
-import ru.etu.timetable_bot.model.DayTimetable;
-import ru.etu.timetable_bot.model.Lessons;
+
 import ru.etu.timetable_bot.utils.DateUtils;
+import com.fasterxml.jackson.databind.JsonNode;
 
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import java.util.ArrayList;
 
 import java.util.List;
-import java.util.StringJoiner;
 
 @Component
 public class TimetableBot extends TelegramLongPollingBot {
 
-    private final Map<Long, String> userAction = new ConcurrentHashMap<>();
     private final Map<Long, String> userSelectedDay = new ConcurrentHashMap<>();
+    private final Map<Long, String> userGroup = new ConcurrentHashMap<>();
+    private final Map<Long, String> userMenuState = new ConcurrentHashMap<>();
+
 
     @Value("${token}")
     private String botToken;
@@ -34,6 +35,7 @@ public class TimetableBot extends TelegramLongPollingBot {
     private String botName;
 
     private final TimetableAPIservice timetableAPIservice;
+
 
     public TimetableBot(TimetableAPIservice timetableAPIservice) {
         this.timetableAPIservice = timetableAPIservice;
@@ -49,39 +51,6 @@ public class TimetableBot extends TelegramLongPollingBot {
         return botToken;
     }
 
-    private void askForGroup(long chatId, String action) {
-        userAction.put(chatId, action);
-        sendMsg(chatId, "Введите номер группы (4 цифры, например: 4354):");
-    }
-
-    private void askForGroupForDay(long chatId, String day) {
-        userAction.put(chatId, "day");
-        userSelectedDay.put(chatId, day);
-        sendMsg(chatId, "Введите номер группы (4 цифры, например: 4354):");
-    }
-
-    private void handleGroupInput(long chatId, String group) throws Exception {
-        String action = userAction.getOrDefault(chatId, "");
-        if (action.isEmpty()) {
-            sendMsg(chatId, "Выберите действие в меню.");
-            return;
-        }
-
-        if ("near".equals(action)) {
-            handleNearLesson(chatId, group);
-        } else if ("tomorrow".equals(action)) {
-            handleTomorrow(chatId, group);
-        } else if ("all".equals(action)) {
-            handleAllWeeksBoth(chatId, group);
-        } else if ("day".equals(action)) {
-            String day = userSelectedDay.get(chatId);
-            handleDayFull(chatId, day, group);
-        }
-
-        userAction.remove(chatId);
-        userSelectedDay.remove(chatId);
-    }
-
     @Override
     public void onUpdateReceived(Update update) {
         if (update.hasMessage() && update.getMessage().hasText()) {
@@ -90,23 +59,49 @@ public class TimetableBot extends TelegramLongPollingBot {
 
             try {
                 if (text.equals("/start")) {
+                    String group = userGroup.get(chatId);
+                    userGroup.remove(chatId);
+                    userSelectedDay.remove(chatId);
+                    userMenuState.remove(chatId);
+                    if (group == null) {
+                        sendMsg(chatId, "Привет! Укажите номер вашей группы (4 цифры, например: 4354):");
+                    } else {
+                        sendMsg(chatId, "Ваша группа: " + group + "\nВыберите действие:");
+                        showMainMenu(chatId);
+                    }
+                } else if (text.matches("\\d{4}")) {
+                    userGroup.put(chatId, text);
+                    sendMsg(chatId, "Группа сохранена: " + text);
                     showMainMenu(chatId);
-                } else if (text.equals("Ближайшее занятие")) {
-                    askForGroup(chatId, "near");
+                } else if (text.equals("Сменить группу")) {
+                    sendMsg(chatId, "Введите новый номер группы (4 цифры):");
+                } else if (text.equals("Ближайшая пара")) {
+                    handleNearLesson(chatId);
                 } else if (text.equals("Завтра")) {
-                    askForGroup(chatId, "tomorrow");
+                    handleTomorrow(chatId);
+                } else if (text.equals("Вся неделя")) {
+                    showWeekSelectionForFullWeek(chatId);
                 } else if (text.equals("Расписание по дням")) {
                     showDayMenu(chatId);
-                } else if (text.equals("Вся неделя")) {
-                    askForGroup(chatId, "all");
-                } else if (text.equals("Назад")) {
-                    showMainMenu(chatId);
                 } else if (List.of("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота").contains(text)) {
-                    askForGroupForDay(chatId, text);
-                } else if (text.matches("\\d{4}")) {
-                    handleGroupInput(chatId, text);
+                    showWeekSelectionMenu(chatId, text);
+                } else if (text.equals("Нечетная неделя")) {
+                    handleWeekSelection(chatId, "odd");
+                } else if (text.equals("Четная неделя")) {
+                    handleWeekSelection(chatId, "even");
+                } else if (text.equals("Обе недели")) {
+                    handleWeekSelection(chatId, "both");
+                } else if (text.equals("Назад")) {
+                    String state = userMenuState.get(chatId);
+                    if ("week_selection".equals(state) || "week_selection_for_full".equals(state)) {
+                        showDayMenu(chatId);
+                    } else if ("day_selection".equals(state)) {
+                        showMainMenu(chatId);
+                    } else {
+                        showMainMenu(chatId);
+                    }
                 } else {
-                    sendMsg(chatId, "Нажмите кнопку в меню.");
+                    sendMsg(chatId, "Пожалуйста, используйте кнопки.");
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -115,136 +110,439 @@ public class TimetableBot extends TelegramLongPollingBot {
         }
     }
 
-    private void handleNearLesson(long chatId, String group) throws Exception {
-        if (!group.matches("\\d{4}")) {
-            sendMsg(chatId, "Группа: 4 цифры (например, 4354)");
+    private void handleNearLesson(long chatId) throws Exception {
+        String group = userGroup.get(chatId);
+        if (group == null) {
+            sendMsg(chatId, "Сначала укажите группу.");
             return;
         }
 
-        List<DayTimetable> schedule = timetableAPIservice.getScheduleForGroup(group);
+        JsonNode rawSchedule = timetableAPIservice.getRawSchedule(group);
+        JsonNode groupNode = rawSchedule.get(group);
+        if (groupNode == null || !groupNode.has("days")) {
+            sendMsg(chatId, "Расписание не найдено.");
+            return;
+        }
+
         LocalDateTime now = LocalDateTime.now();
+        LocalDate today = now.toLocalDate();
 
-        for (int days = 0; days < 14; days++) {
-            LocalDateTime checkTime = now.plusDays(days);
-            LocalDate checkDate = checkTime.toLocalDate();
+        List<LessonWithDateTime> allLessons = new ArrayList<>();
 
-            for (DayTimetable ds : schedule) {
-                if (ds.date.equals(checkDate) && ds.lessons != null) {
-                    for (Lessons lesson : ds.lessons) {
-                        LocalDateTime lessonStart = ds.date.atTime(lesson.startTime);
-                        if (lessonStart.isAfter(now)) {
-                            // Проверяем, подходит ли занятие по неделе
-                            boolean isEvenNow = DateUtils.isEvenWeek(ds.date);
-                            if ("0".equals(lesson.week) ||
-                                    ("1".equals(lesson.week) || "3".equals(lesson.week) ? !isEvenNow : isEvenNow)) {
-                                sendMsg(chatId, "Ближайшее занятие:\n" + ds.date + " " + lesson.startTime + "\n" + lesson.toString());
-                                return;
-                            }
-                        }
+        for (int dayIndex = 0; dayIndex < 7; dayIndex++) {
+            LocalDate date = today.plusDays(dayIndex);
+            JsonNode dayNode = groupNode.path("days").path(String.valueOf(date.getDayOfWeek().getValue() % 7));
+            if (!dayNode.has("lessons")) continue;
+
+            for (JsonNode l : dayNode.get("lessons")) {
+                String week = l.get("week").asText();
+                boolean isEvenDate = DateUtils.isEvenWeek(date);
+                boolean matchesWeek = "0".equals(week) ||
+                        (("1".equals(week) || "3".equals(week)) && !isEvenDate) ||
+                        (("2".equals(week) || "4".equals(week)) && isEvenDate);
+
+                if (matchesWeek) {
+                    LocalTime start = LocalTime.parse(l.get("start_time").asText());
+                    LocalDateTime lessonTime = date.atTime(start);
+                    if (lessonTime.isAfter(now)) {
+                        allLessons.add(new LessonWithDateTime(l, lessonTime));
                     }
                 }
             }
         }
-        sendMsg(chatId, "Ближайшие 2 недели — занятий нет.");
+
+        if (allLessons.isEmpty()) {
+            sendMsg(chatId, "Ближайшие 2 недели — занятий нет.");
+            return;
+        }
+
+        allLessons.sort(Comparator.comparing(l -> l.dateTime));
+
+        LessonWithDateTime next = allLessons.get(0);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("📅 Ближайшая пара\n\n");
+        sb.append(formatLessonWithTime(next.lessonNode, 1));
+        sb.append("\nℹ️ Чтобы увидеть расписание на день, используйте «Расписание по дням».");
+
+        sendMsg(chatId, sb.toString());
     }
 
-    private void handleTomorrow(long chatId, String group) throws Exception {
+    private void handleTomorrow(long chatId) throws Exception {
+        String group = userGroup.get(chatId);
+        if (group == null) {
+            sendMsg(chatId, "Сначала укажите группу.");
+            return;
+        }
+
         LocalDate today = LocalDate.now();
         LocalDate tomorrow = today.getDayOfWeek() == DayOfWeek.SUNDAY
                 ? today.plusDays(1)
                 : today.plusDays(1);
 
-        List<DayTimetable> schedule = timetableAPIservice.getScheduleForGroup(group);
-        for (DayTimetable ds : schedule) {
-            if (ds.date.equals(tomorrow)) {
-                if (ds.isEmpty()) {
-                    sendMsg(chatId, "Завтра занятий нет.");
-                } else {
-                    sendMsg(chatId, "Завтра (" + tomorrow + "):\n" + formatDaySimple(ds));
-                }
-                return;
-            }
-        }
-        sendMsg(chatId, "Расписание на завтра не загружено.");
-    }
+        boolean isEvenWeek = DateUtils.isEvenWeek(tomorrow);
+        String weekStr = isEvenWeek ? "четной" : "нечетной";
 
-    private void handleDayFull(long chatId, String dayName, String group) throws Exception {
-        DayOfWeek day = parseRussianDay(dayName);
-        if (day == null) {
-            sendMsg(chatId, "Неизвестный день");
+        JsonNode rawSchedule = timetableAPIservice.getRawSchedule(group);
+        JsonNode groupNode = rawSchedule.get(group);
+        if (groupNode == null || !groupNode.has("days")) {
+            sendMsg(chatId, "Расписание не найдено.");
             return;
         }
 
-        LocalDate start = LocalDate.now();
-        LocalDate end = start.plusWeeks(4);
-        String url = String.format(
-                "https://digital.etu.ru/api/mobile/schedule?groupNumber=%s&season=autumn&year=2025&joinWeeks=true&withURL=true",
-                group
-        );
-        List<DayTimetable> fullSchedule = timetableAPIservice.getScheduleForGroup(group);
+        int dayIndex = tomorrow.getDayOfWeek().getValue() % 7;
+        JsonNode dayNode = groupNode.path("days").path(String.valueOf(dayIndex));
+        if (!dayNode.has("lessons")) {
+            sendMsg(chatId, "Завтра занятий нет.");
+            return;
+        }
 
-        List<DayTimetable> matchingDays = new ArrayList<>();
-        LocalDate today = LocalDate.now();
-        for (int i = 0; i < 14; i++) {
-            LocalDate candidate = today.plusDays(i);
-            if (candidate.getDayOfWeek() == day) {
-                for (DayTimetable ds : fullSchedule) {
-                    if (ds.date.equals(candidate)) {
-                        matchingDays.add(ds);
-                        if (matchingDays.size() == 2) break;
-                    }
-                }
-                if (matchingDays.size() == 2) break;
+        List<JsonNode> lessons = new ArrayList<>();
+        for (JsonNode l : dayNode.get("lessons")) {
+            String w = l.get("week").asText();
+            if ("0".equals(w) ||
+                    ("1".equals(w) || "3".equals(w) && !isEvenWeek) ||
+                    ("2".equals(w) || "4".equals(w) && isEvenWeek)) {
+                lessons.add(l);
             }
         }
 
-        if (matchingDays.isEmpty()) {
+        if (lessons.isEmpty()) {
+            sendMsg(chatId, "Завтра занятий нет.");
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("📅 Завтра\n\n");
+        int index = 1;
+        for (JsonNode l : lessons) {
+            sb.append(formatLessonWithTime(l, index)).append("\n");
+            index++;
+        }
+        sb.append("\nℹ️ Чтобы увидеть расписание на другой день, используйте «Расписание по дням».");
+
+        sendMsg(chatId, sb.toString());
+    }
+
+    private static class LessonWithDateTime {
+        JsonNode lessonNode;
+        LocalDateTime dateTime;
+
+        LessonWithDateTime(JsonNode lessonNode, LocalDateTime dateTime) {
+            this.lessonNode = lessonNode;
+            this.dateTime = dateTime;
+        }
+    }
+
+    private void handleWeekSelection(long chatId, String weekType) throws Exception {
+        String state = userMenuState.get(chatId);
+        if ("week_selection_for_full".equals(state)) {
+            handleFullWeekForType(chatId, weekType);
+        } else {
+            // Режим: день недели
+            String group = userGroup.get(chatId);
+            String dayName = userSelectedDay.get(chatId);
+            if (group == null || dayName == null) {
+                sendMsg(chatId, "Сначала выберите группу и день.");
+                return;
+            }
+            handleDayForWeek(chatId, weekType);
+        }
+    }
+
+
+    private void showWeekSelectionForFullWeek(long chatId) {
+        userMenuState.put(chatId, "week_selection_for_full");
+        boolean isEven = DateUtils.isEvenWeek(LocalDate.now());
+        String currentWeek = isEven ? "четная" : "нечетная";
+
+
+        String message = String.format(
+                "📅 Вся неделя\nСейчас идёт %s неделя.\nКакую неделю показать?",
+                currentWeek
+        );
+
+        SendMessage msg = SendMessage.builder()
+                .chatId(String.valueOf(chatId))
+                .text(message)
+                .replyMarkup(createWeekSelectionMenu())
+                .build();
+
+        try {
+            execute(msg);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void showWeekSelectionMenu(long chatId, String dayName) {
+        userSelectedDay.put(chatId, dayName);
+        userMenuState.put(chatId, "week_selection");
+        boolean isEven = DateUtils.isEvenWeek(LocalDate.now());
+        String currentWeek = isEven ? "четная" : "нечетная";
+
+        String message = String.format(
+                "📅 %s\nСейчас идёт %s неделя.\nКакую неделю показать?",
+                dayName, currentWeek
+        );
+
+        SendMessage msg = SendMessage.builder()
+                .chatId(String.valueOf(chatId))
+                .text(message)
+                .replyMarkup(createWeekSelectionMenu())
+                .build();
+
+        try {
+            execute(msg);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private ReplyKeyboardMarkup createWeekSelectionMenu() {
+        ReplyKeyboardMarkup keyboard = new ReplyKeyboardMarkup();
+        List<KeyboardRow> rows = new ArrayList<>();
+
+        KeyboardRow r1 = new KeyboardRow();
+        r1.add("Нечетная неделя");
+        r1.add("Четная неделя");
+        rows.add(r1);
+
+        KeyboardRow r2 = new KeyboardRow();
+        r2.add("Обе недели");
+        r2.add("Назад");
+        rows.add(r2);
+
+        keyboard.setKeyboard(rows);
+        keyboard.setResizeKeyboard(true);
+        return keyboard;
+    }
+
+    private void handleDayForWeek(long chatId, String weekType) throws Exception {
+        String group = userGroup.get(chatId);
+        String dayName = userSelectedDay.get(chatId);
+
+        if (group == null || dayName == null) {
+            sendMsg(chatId, "Ошибка. Начните заново.");
+            return;
+        }
+
+        JsonNode rawSchedule = timetableAPIservice.getRawSchedule(group);
+        JsonNode groupNode = rawSchedule.get(group);
+        if (groupNode == null || !groupNode.has("days")) {
+            sendMsg(chatId, "Расписание не найдено.");
+            return;
+        }
+
+        Integer dayIndex = getDayIndex(dayName);
+        if (dayIndex == null) {
+            sendMsg(chatId, "Неизвестный день.");
+            return;
+        }
+
+        JsonNode days = groupNode.get("days");
+        JsonNode dayNode = days.get(dayIndex.toString());
+        if (dayNode == null || !dayNode.has("lessons")) {
             sendMsg(chatId, "В " + dayName.toLowerCase() + " занятий нет.");
             return;
         }
 
-        Map<String, List<Lessons>> timeSlots = new LinkedHashMap<>();
-        for (DayTimetable ds : matchingDays) {
-            if (ds.lessons != null) {
-                for (Lessons l : ds.lessons) {
-                    String key = l.startTime + "-" + l.endTime;
-                    timeSlots.computeIfAbsent(key, k -> new ArrayList<>()).add(l);
-                }
+        List<JsonNode> lessons = new ArrayList<>();
+        for (JsonNode l : dayNode.get("lessons")) {
+            String w = l.get("week").asText();
+            if ("both".equals(weekType)) {
+                lessons.add(l);
+            } else if ("odd".equals(weekType) && ("1".equals(w) || "3".equals(w) || "0".equals(w))) {
+                lessons.add(l);
+            } else if ("even".equals(weekType) && ("2".equals(w) || "4".equals(w) || "0".equals(w))) {
+                lessons.add(l);
             }
         }
 
-        StringBuilder sb = new StringBuilder();
-        sb.append(" ").append(dayName).append("\n\n");
+        if (lessons.isEmpty()) {
+            String weekStr = "odd".equals(weekType) ? "нечетной" : "четной";
+            sendMsg(chatId, "В " + dayName.toLowerCase() + " на " + weekStr + " неделе занятий нет.");
+            return;
+        }
 
-        for (Map.Entry<String, List<Lessons>> slot : timeSlots.entrySet()) {
-            List<Lessons> lessons = slot.getValue();
-            if (lessons.size() == 1) {
-                Lessons l = lessons.get(0);
-                if ("0".equals(l.week)) {
-                    sb.append("  • ").append(l.subject).append(" (").append(l.type).append("), ").append(l.teacher).append(", ").append(l.room).append("\n");
+        StringBuilder sb = new StringBuilder();
+        if ("both".equals(weekType)) {
+            sb.append("📅 ").append(dayName).append("\n\n");
+            Map<String, List<JsonNode>> slots = new LinkedHashMap<>();
+            for (JsonNode l : lessons) {
+                String key = l.get("start_time").asText() + "-" + l.get("end_time").asText();
+                slots.computeIfAbsent(key, k -> new ArrayList<>()).add(l);
+            }
+
+            for (List<JsonNode> slot : slots.values()) {
+                if (slot.size() == 1) {
+                    JsonNode l = slot.get(0);
+                    if ("0".equals(l.get("week").asText())) {
+                        sb.append("• ").append(formatLessonWithTime(l, 0)).append("\n");
+                    } else {
+                        String wType = ("1".equals(l.get("week").asText()) || "3".equals(l.get("week").asText())) ? "Нечетная" : "Четная";
+                        sb.append("• ").append(wType).append(": ").append(formatLessonWithTime(l, 0)).append("\n");
+                    }
                 } else {
-                    String weekType = ("1".equals(l.week) || "3".equals(l.week)) ? "Нечётная" : "Чётная";
-                    sb.append("  • ").append(weekType).append(" неделя: ").append(l.subject).append(" (").append(l.type).append("), ").append(l.teacher).append(", ").append(l.room).append("\n");
-                }
-            } else {
-                Lessons odd = null, even = null;
-                for (Lessons l : lessons) {
-                    if ("1".equals(l.week) || "3".equals(l.week)) {
-                        odd = l;
-                    } else if ("2".equals(l.week) || "4".equals(l.week)) {
-                        even = l;
+                    for (JsonNode l : slot) {
+                        String wType = ("1".equals(l.get("week").asText()) || "3".equals(l.get("week").asText())) ? "Нечетная" : "Четная";
+                        sb.append("• ").append(wType).append(": ").append(formatLessonWithTime(l, 0)).append("\n");
                     }
                 }
-                if (odd != null) {
-                    sb.append("  • Нечётная неделя: ").append(odd.subject).append(" (").append(odd.type).append("), ").append(odd.teacher).append(", ").append(odd.room).append("\n");
-                }
-                if (even != null) {
-                    sb.append("  • Чётная неделя:       ").append(even.subject).append(" (").append(even.type).append("), ").append(even.teacher).append(", ").append(even.room).append("\n");
-                }
+            }
+        } else {
+            String weekTitle = "odd".equals(weekType) ? "нечетная" : "четная";
+            sb.append("📅 ").append(dayName).append("\n(неделя: ").append(weekTitle).append(")\n\n");
+            int index = 1;
+            for (JsonNode l : lessons) {
+                sb.append(formatLessonWithTime(l, index)).append("\n");
+                index++;
             }
         }
 
         sendMsg(chatId, sb.toString());
+    }
+
+    private void handleFullWeekForType(long chatId, String weekType) throws Exception {
+        String group = userGroup.get(chatId);
+        if (group == null) {
+            sendMsg(chatId, "Сначала укажите группу.");
+            return;
+        }
+
+        JsonNode rawSchedule = timetableAPIservice.getRawSchedule(group);
+        JsonNode groupNode = rawSchedule.get(group);
+        if (groupNode == null || !groupNode.has("days")) {
+            sendMsg(chatId, "Расписание не найдено.");
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        boolean isEven = "even".equals(weekType);
+        boolean isBoth = "both".equals(weekType);
+
+
+        if (isBoth) {
+            sb.append("📅 Расписание на обе недели\n\n");
+            sb.append(" Нечетная неделя\n");
+            appendWeek(sb, groupNode, false); // false - нечетная
+            sb.append("\n Четная неделя\n");
+            appendWeek(sb, groupNode, true);  // true - четная
+        } else {
+            String title = isEven ? "четной" : "нечетной";
+            sb.append("📅Расписание на ").append(title).append(" неделе.\n\n");
+            appendWeek(sb, groupNode, isEven);
+        }
+
+        sendMsg(chatId, sb.toString());
+    }
+
+    private void appendWeek(StringBuilder sb, JsonNode groupNode, boolean evenWeek) {
+        String[] dayNames = {"Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"};
+
+        for (int i = 0; i < 6; i++) {
+            JsonNode dayNode = groupNode.path("days").path(String.valueOf(i));
+            if (!dayNode.has("lessons")) continue;
+
+            List<JsonNode> filtered = new ArrayList<>();
+            for (JsonNode lesson : dayNode.get("lessons")) {
+                String w = lesson.get("week").asText();
+                if ("0".equals(w)) {
+                    filtered.add(lesson);
+                } else {
+                    boolean lessonEven = "2".equals(w) || "4".equals(w);
+                    if (lessonEven == evenWeek) {
+                        filtered.add(lesson);
+                    }
+                }
+            }
+
+            if (!filtered.isEmpty()) {
+                sb.append("").append(dayNames[i]).append("\n");
+                int index = 1;
+                for (JsonNode l : filtered) {
+                    sb.append(formatLessonWithTime(l, index)).append("\n");
+                    index++;
+                }
+                sb.append("\n");
+            }
+        }
+
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) == '\n') {
+            sb.setLength(sb.length() - 1);
+        }
+    }
+
+
+    private String formatLessonWithTime(JsonNode l, int index) {
+        String start = l.get("start_time").asText();
+        String end = l.get("end_time").asText();
+        String subject = l.get("name").asText();
+        String type = l.get("subjectType").asText();
+        String teacher = getTeacher(l);
+        String room = getRoom(l);
+
+        StringBuilder sb = new StringBuilder();
+
+        sb.append(index).append(". ").append(subject).append(" (").append(type).append(")\n");
+
+        sb.append("🕒 ").append(start).append(" - ").append(end).append("\n");
+
+        if (!teacher.isEmpty()) {
+            sb.append("Преподаватель: ").append(teacher).append("\n");
+        }
+
+        if ("онлайн".equalsIgnoreCase(room)) {
+            sb.append("Форма: дистанционно\n");
+        } else if (!room.isEmpty() && !room.equals("—")) {
+            sb.append("Ауд. ").append(room).append("\n");
+        }
+
+        JsonNode urlNode = l.path("url");
+        String url = null;
+        if (!urlNode.isMissingNode() && !urlNode.isNull() && urlNode.asText() != null) {
+            url = urlNode.asText().trim();
+        }
+        if (url != null && !url.isEmpty() && !url.equals("null") && !url.equals("—")) {
+            sb.append("Сслылка: ").append(url).append("\n");
+        }
+
+        return sb.toString();
+    }
+
+
+    private String getTeacher(JsonNode l) {
+        String main = l.path("teacher").asText("").trim();
+        String second = l.path("second_teacher").asText("").trim();
+
+        if (main.isEmpty() && second.isEmpty()) {
+            return "";
+        }
+        if (second.isEmpty()) {
+            return main;
+        }
+        return main + ", " + second;
+    }
+
+    private String getRoom(JsonNode l) {
+        String form = l.path("form").asText("");
+        if ("online".equalsIgnoreCase(form) || "онлайн".equalsIgnoreCase(form)) {
+            return "онлайн";
+        }
+        String room = l.path("room").asText("");
+        return room.isEmpty() ? "—" : room;
+    }
+
+    private Integer getDayIndex(String dayName) {
+        return switch (dayName) {
+            case "Понедельник" -> 0;
+            case "Вторник" -> 1;
+            case "Среда" -> 2;
+            case "Четверг" -> 3;
+            case "Пятница" -> 4;
+            case "Суббота" -> 5;
+            default -> null;
+        };
     }
 
 
@@ -261,6 +559,7 @@ public class TimetableBot extends TelegramLongPollingBot {
     }
 
     private void showMainMenu(long chatId) {
+        userMenuState.put(chatId, "main");
         SendMessage msg = SendMessage.builder()
                 .chatId(String.valueOf(chatId))
                 .text("Выберите действие:")
@@ -278,7 +577,7 @@ public class TimetableBot extends TelegramLongPollingBot {
         List<KeyboardRow> rows = new ArrayList<>();
 
         KeyboardRow row1 = new KeyboardRow();
-        row1.add("Ближайшее занятие");
+        row1.add("Ближайшая пара");
         row1.add("Завтра");
         rows.add(row1);
 
@@ -287,12 +586,17 @@ public class TimetableBot extends TelegramLongPollingBot {
         row2.add("Вся неделя");
         rows.add(row2);
 
+        KeyboardRow row3 = new KeyboardRow();
+        row3.add("Сменить группу");
+        rows.add(row3);
+
         keyboard.setKeyboard(rows);
         keyboard.setResizeKeyboard(true);
         return keyboard;
     }
 
     private void showDayMenu(long chatId) {
+        userMenuState.put(chatId, "day_selection");
         SendMessage msg = SendMessage.builder()
                 .chatId(String.valueOf(chatId))
                 .text("Выберите день:")
@@ -310,11 +614,15 @@ public class TimetableBot extends TelegramLongPollingBot {
         List<KeyboardRow> rows = new ArrayList<>();
 
         KeyboardRow r1 = new KeyboardRow();
-        r1.add("Понедельник"); r1.add("Вторник"); r1.add("Среда");
+        r1.add("Понедельник");
+        r1.add("Вторник");
+        r1.add("Среда");
         rows.add(r1);
 
         KeyboardRow r2 = new KeyboardRow();
-        r2.add("Четверг"); r2.add("Пятница"); r2.add("Суббота");
+        r2.add("Четверг");
+        r2.add("Пятница");
+        r2.add("Суббота");
         rows.add(r2);
 
         KeyboardRow r3 = new KeyboardRow();
@@ -324,74 +632,5 @@ public class TimetableBot extends TelegramLongPollingBot {
         keyboard.setKeyboard(rows);
         keyboard.setResizeKeyboard(true);
         return keyboard;
-    }
-
-    private DayOfWeek parseRussianDay(String name) {
-        return switch (name) {
-            case "Понедельник" -> DayOfWeek.MONDAY;
-            case "Вторник" -> DayOfWeek.TUESDAY;
-            case "Среда" -> DayOfWeek.WEDNESDAY;
-            case "Четверг" -> DayOfWeek.THURSDAY;
-            case "Пятница" -> DayOfWeek.FRIDAY;
-            case "Суббота" -> DayOfWeek.SATURDAY;
-            default -> null;
-        };
-    }
-
-    private String formatDaySimple(DayTimetable ds) {
-        if (ds.isEmpty()) return "Занятий нет.";
-        StringJoiner sj = new StringJoiner("\n");
-        for (Lessons l : ds.lessons) {
-            sj.add("  • " + l.toString());
-        }
-        return sj.toString();
-    }
-
-    private void handleAllWeeksBoth(long chatId, String group) throws Exception {
-        if (!group.matches("\\d{4}")) {
-            sendMsg(chatId, "Группа должна быть из 4 цифр (например: 4354)");
-            return;
-        }
-
-        // Получаем расписание на текущую неделю
-        List<DayTimetable> schedule = timetableAPIservice.getScheduleForGroup(group);
-
-        // Определяем ближайший понедельник для нечётной и чётной недели
-        LocalDate today = LocalDate.now();
-        LocalDate mondayOdd = today.with(java.time.temporal.TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
-        if (DateUtils.isEvenWeek(mondayOdd)) {
-            mondayOdd = mondayOdd.plusWeeks(1); // следующая нечётная
-        }
-
-        LocalDate mondayEven = mondayOdd.plusWeeks(1); // чётная неделя
-
-        // Формируем вывод для нечётной недели
-        StringBuilder response = new StringBuilder();
-        response.append("📅 *Нечётная неделя* (").append(mondayOdd).append(" – ").append(mondayOdd.plusDays(5)).append("):\n\n");
-        appendWeekSchedule(response, schedule, mondayOdd);
-
-        response.append("\n📅 *Чётная неделя* (").append(mondayEven).append(" – ").append(mondayEven.plusDays(5)).append("):\n\n");
-        appendWeekSchedule(response, schedule, mondayEven);
-
-        sendMsg(chatId, response.toString());
-    }
-
-    private void appendWeekSchedule(StringBuilder sb, List<DayTimetable> schedule, LocalDate monday) {
-        for (int i = 0; i < 6; i++) { // Пн–Сб
-            LocalDate day = monday.plusDays(i);
-            for (DayTimetable ds : schedule) {
-                if (ds.date.equals(day) && !ds.isEmpty()) {
-                    sb.append(ds.date).append(":\n");
-                    for (Lessons lesson : ds.lessons) {
-                        sb.append("  • ").append(lesson.toString()).append("\n");
-                    }
-                    sb.append("\n");
-                    break;
-                }
-            }
-        }
-        if (sb.toString().endsWith("\n\n")) {
-            sb.setLength(sb.length() - 2);
-        }
     }
 }
