@@ -111,6 +111,34 @@ public class TimetableBot extends TelegramLongPollingBot {
                 sendMsg(chatId, "Ошибка: " + e.getMessage());
             }
         }
+        else if (update.hasMessage()) {
+            long chatId = update.getMessage().getChatId();
+            sendMsg(chatId, "Я понимаю только текстовые сообщения.\n" +
+                    "Пожалуйста, используйте кнопки меню или введите команду /start");
+        }
+    }
+
+    private ReplyKeyboardMarkup createMainMenu() {
+        ReplyKeyboardMarkup keyboard = new ReplyKeyboardMarkup();
+        List<KeyboardRow> rows = new ArrayList<>();
+
+        KeyboardRow row1 = new KeyboardRow();
+        row1.add("Ближайшая пара");
+        row1.add("Завтра");
+        rows.add(row1);
+
+        KeyboardRow row2 = new KeyboardRow();
+        row2.add("Расписание по дням");
+        row2.add("Вся неделя");
+        rows.add(row2);
+
+        KeyboardRow row3 = new KeyboardRow();
+        row3.add("Сменить группу");
+        rows.add(row3);
+
+        keyboard.setKeyboard(rows);
+        keyboard.setResizeKeyboard(true);
+        return keyboard;
     }
 
 
@@ -798,29 +826,6 @@ public class TimetableBot extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
-    }
-
-    private ReplyKeyboardMarkup createMainMenu() {
-        ReplyKeyboardMarkup keyboard = new ReplyKeyboardMarkup();
-        List<KeyboardRow> rows = new ArrayList<>();
-
-        KeyboardRow row1 = new KeyboardRow();
-        row1.add("Ближайшая пара");
-        row1.add("Завтра");
-        rows.add(row1);
-
-        KeyboardRow row2 = new KeyboardRow();
-        row2.add("Расписание по дням");
-        row2.add("Вся неделя");
-        rows.add(row2);
-
-        KeyboardRow row3 = new KeyboardRow();
-        row3.add("Сменить группу");
-        rows.add(row3);
-
-        keyboard.setKeyboard(rows);
-        keyboard.setResizeKeyboard(true);
-        return keyboard;
     }
 
     private void showDayMenu(long chatId) {
