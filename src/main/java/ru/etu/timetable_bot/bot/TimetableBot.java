@@ -142,6 +142,46 @@ public class TimetableBot extends TelegramLongPollingBot {
     }
 
 
+    private void showDayMenu(long chatId) {
+        userMenuState.put(chatId, "day_selection");
+        SendMessage msg = SendMessage.builder()
+                .chatId(String.valueOf(chatId))
+                .text("Выберите день:")
+                .replyMarkup(createDayMenu())
+                .build();
+        try {
+            execute(msg);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private ReplyKeyboardMarkup createDayMenu() {
+        ReplyKeyboardMarkup keyboard = new ReplyKeyboardMarkup();
+        List<KeyboardRow> rows = new ArrayList<>();
+
+        KeyboardRow r1 = new KeyboardRow();
+        r1.add("Понедельник");
+        r1.add("Вторник");
+        r1.add("Среда");
+        rows.add(r1);
+
+        KeyboardRow r2 = new KeyboardRow();
+        r2.add("Четверг");
+        r2.add("Пятница");
+        r2.add("Суббота");
+        rows.add(r2);
+
+        KeyboardRow r3 = new KeyboardRow();
+        r3.add("Назад");
+        rows.add(r3);
+
+        keyboard.setKeyboard(rows);
+        keyboard.setResizeKeyboard(true);
+        return keyboard;
+    }
+
+
     private void handleDayForWeek(long chatId, String weekType) throws Exception {
         String group = userGroup.get(chatId);
         String dayName = userSelectedDay.get(chatId);
@@ -205,15 +245,6 @@ public class TimetableBot extends TelegramLongPollingBot {
                     if ("1".equals(w) || "3".equals(w)) {
                         chosen = l;
                         break;
-                    }
-                }
-                if (chosen == null) {
-                    for (JsonNode l : slot) {
-                        String w = l.get("week").asText();
-                        if ("2".equals(w)) {
-                            chosen = l;
-                            break;
-                        }
                     }
                 }
             }
@@ -311,15 +342,6 @@ public class TimetableBot extends TelegramLongPollingBot {
                             break;
                         }
                     }
-                    if (chosen == null) {
-                        for (JsonNode l : entry.getValue()) {
-                            String w = l.get("week").asText();
-                            if ("2".equals(w)) {
-                                chosen = l;
-                                break;
-                            }
-                        }
-                    }
                 }
 
                 if (chosen != null) {
@@ -357,7 +379,7 @@ public class TimetableBot extends TelegramLongPollingBot {
             return;
         }
 
-        int dayIndex = tomorrowDayOfWeek.getValue() - 1; // Monday=0, Tuesday=1, ..Saturday=5
+        int dayIndex = tomorrowDayOfWeek.getValue() - 1;
 
         boolean isEvenWeek = DateUtils.isEvenWeek(tomorrow);
 
@@ -410,15 +432,6 @@ public class TimetableBot extends TelegramLongPollingBot {
                         break;
                     }
                 }
-                if (chosen == null) {
-                    for (JsonNode l : slot) {
-                        String w = l.get("week").asText();
-                        if ("2".equals(w)) {
-                            chosen = l;
-                            break;
-                        }
-                    }
-                }
             }
 
             if (chosen != null) {
@@ -453,7 +466,6 @@ public class TimetableBot extends TelegramLongPollingBot {
             sb.append(formatLessonWithTime(l, index)).append("\n");
             index++;
         }
-
         sendMsg(chatId, sb.toString());
     }
 
@@ -497,15 +509,6 @@ public class TimetableBot extends TelegramLongPollingBot {
                         if ("1".equals(w) || "3".equals(w)) {
                             chosen = l;
                             break;
-                        }
-                    }
-                    if (chosen == null) {
-                        for (JsonNode l : slot) {
-                            String w = l.get("week").asText();
-                            if ("2".equals(w)) {
-                                chosen = l;
-                                break;
-                            }
                         }
                     }
                 }
@@ -826,44 +829,5 @@ public class TimetableBot extends TelegramLongPollingBot {
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
-    }
-
-    private void showDayMenu(long chatId) {
-        userMenuState.put(chatId, "day_selection");
-        SendMessage msg = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text("Выберите день:")
-                .replyMarkup(createDayMenu())
-                .build();
-        try {
-            execute(msg);
-        } catch (TelegramApiException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private ReplyKeyboardMarkup createDayMenu() {
-        ReplyKeyboardMarkup keyboard = new ReplyKeyboardMarkup();
-        List<KeyboardRow> rows = new ArrayList<>();
-
-        KeyboardRow r1 = new KeyboardRow();
-        r1.add("Понедельник");
-        r1.add("Вторник");
-        r1.add("Среда");
-        rows.add(r1);
-
-        KeyboardRow r2 = new KeyboardRow();
-        r2.add("Четверг");
-        r2.add("Пятница");
-        r2.add("Суббота");
-        rows.add(r2);
-
-        KeyboardRow r3 = new KeyboardRow();
-        r3.add("Назад");
-        rows.add(r3);
-
-        keyboard.setKeyboard(rows);
-        keyboard.setResizeKeyboard(true);
-        return keyboard;
     }
 }
