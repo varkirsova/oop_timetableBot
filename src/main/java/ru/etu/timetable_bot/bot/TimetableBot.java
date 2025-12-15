@@ -118,6 +118,22 @@ public class TimetableBot extends TelegramLongPollingBot {
         }
     }
 
+
+    private void showMainMenu(long chatId) {
+        userMenuState.put(chatId, "main");
+        SendMessage msg = SendMessage.builder()
+                .chatId(String.valueOf(chatId))
+                .text("Выберите действие:")
+                .replyMarkup(createMainMenu())
+                .build();
+        try {
+            execute(msg);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+
     private ReplyKeyboardMarkup createMainMenu() {
         ReplyKeyboardMarkup keyboard = new ReplyKeyboardMarkup();
         List<KeyboardRow> rows = new ArrayList<>();
@@ -812,20 +828,6 @@ public class TimetableBot extends TelegramLongPollingBot {
                 .build();
         try {
             execute(message);
-        } catch (TelegramApiException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void showMainMenu(long chatId) {
-        userMenuState.put(chatId, "main");
-        SendMessage msg = SendMessage.builder()
-                .chatId(String.valueOf(chatId))
-                .text("Выберите действие:")
-                .replyMarkup(createMainMenu())
-                .build();
-        try {
-            execute(msg);
         } catch (TelegramApiException e) {
             e.printStackTrace();
         }
